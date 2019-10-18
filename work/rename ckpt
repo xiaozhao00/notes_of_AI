@@ -1,0 +1,22 @@
+import tensorflow as tf
+
+def rename_var(ckpt_path, new_ckpt_path):
+    with tf.Session() as sess:
+        for var_name, _ in tf.contrib.framework.list_variables(ckpt_path):
+            print(var_name)
+            var = tf.contrib.framework.load_variable(ckpt_path, var_name)
+            temp = var_name.split("/")
+            if len(temp)>1:
+                new_var_name = "/".join(temp[1:])
+            else:
+                new_var_name = var_name
+            print("new_var_name:", new_var_name)
+            var = tf.Variable(var, name=new_var_name)
+
+        saver = tf.train.Saver()
+        sess.run(tf.global_variables_initializer())
+        saver.save(sess, new_ckpt_path)
+
+ckpt_path = './model_fpn_efficientnet_living_room_item24_480/model.ckpt-397372'
+new_ckpt_path = './new_ckpt/model.ckpt'
+rename_var(ckpt_path, new_ckpt_path)
