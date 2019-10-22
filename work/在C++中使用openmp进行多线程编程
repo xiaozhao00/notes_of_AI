@@ -1,0 +1,478 @@
+声明：本文是基于Joel Yliluoma写的Guid into OpenMP:Easy multithreading programming for C++而写的，基本是按照自己的理解，用自己语言组织的。其中大部分例子依然用原来文章的例子，本文仅作为学习笔记之用。
+前言
+多线程在实际的编程中的重要性不言而喻。对于C++而言，当我们需要使用多线程时，可以使用boost::thread库或者自从C++ 11开始支持的std::thread，也可以使用操作系统相关的线程API，如在Linux上，可以使用pthread库。除此之外，还可以使用omp来使用多线程。它的好处是跨平台，使用简单。
+在Linux平台上，如果需要使用omp，只需在编译时使用"-fopenmp"指令。在Windows的visual studio开发环境中，开启omp支持的步骤为“项目属性 -> C/C++ -> 所有选项 -> openmp支持 -> 是(/openmp)”。
+本文我们就介绍omp在C++中的使用方法。
+c++ openmp入门简介
+openmp是由一系列#paragma指令组成，这些指令控制如何多线程的执行程序。另外，即使编译器不支持omp，程序也也能够正常运行，只是程序不会多线程并行运行。以下为使用omp的简单的例子：
+int main()
+{
+	vector<int> vecInt(100);
+        #pragma omp parallel for
+	for (int i = 0; i < vecInt.size(); ++i)
+	{
+	    vecInt[i] = i*i;
+	}
+	return 0;
+}
+
+以上代码会自动以多线程的方式运行for循环中的内容。如果你删除"#pragma omp parallel for"这行，程序依然能够正常运行，唯一的区别在于程序是在单线程中执行。由于C和C++的标准规定，当编译器遇到无法识别的"#pragma"指令时，编译器自动忽略这条指令。所以即使编译器不支持omp，也不会影响程序的编译和运行。
+omp语法
+所有的omp指令都是以"#pragma omp“开头，换行符结束。并且除了barrier和flush两个指令不作用于代码以外，其他的指令都只与指令后面的那段代码相关，比如上面例子中的for循环。
+parallel编译指示
+parallel告诉编译器开始 一个并行块，编译器会创建一个包含N（在运行时决定，通常为硬件线程数）个线程的线程组，所有线程都运行接下来的语句或者由”{...}"包含的代码块，在这执行结束之后，又回到主线程，创建的这N个线程会被回收。
+#pragma omp parallel
+{
+    cout << "parallel run!!!\n";
+}
+
+以上代码在4双核4线程的cpu的电脑上运行时，输出了4行”parallel run!!!"。即编译器创建了一个包含4个线程的线程组来运行这段代码。在这段代码运行结束后，程序执行回到主线程。GCC编译器的实现方式是在内部创建一个函数，然后将相关的执行代码移至这个函数，这样一来代码块中定义的变量成为了线程的局部变量，互不影响。而ICC的实现方式是利用fork()来实现。
+线程之间共享的变量是通过传递引用或者利用register变量来实现同步的，其中register变量在代码执行结束之后或者在flush指令调用时进行同步。
+
+我们也可以利用if条件判断来决定是否对后续的代码采用并行方式执行，如：
+
+
+
+externint parallelism_enabled;
+#pragma omp parallel for if(parallelism_enabled)
+for(int c=0; c<n;++c)
+    handle(c);
+
+在这个例子中，如果parallelism_enabled为false，那么这个for循环只会由一个线程来执行。
+for指令
+omp中的for指令用于告诉编译器，拆分接下来的for循环，并分别在不同的线程中运行不同的部分。如果for指令后没有紧接着for循环，编译器会报错。例如，
+#pragma omp parallel  for
+for (int i = 0; i < 10; ++i)
+{
+   printf("%d ", i);
+}
+
+以上的代码执行后，会打印出[0,9]这10个数字。但是它们的顺序是随机出现的，在我的电脑上，运行的输出是"0 1 2 8 9 6 7 3 4 5"。事实上，输出结果不会是完全随机的，输出的序列是局部有序的，因为在编译器对for循环的拆分相当于下面的代码：
+int this_thread = omp_get_thread_num();
+int num_threads = omp_get_num_threads();
+int my_start = (this_thread)* 10 / num_threads;
+int my_end = (this_thread + 1) * 10 / num_threads;
+for (int n = my_start; n < my_end; ++n)
+    printf("%d ", n);
+
+以上代码中，omp_get_thread_num()用于获取当前线程在当前线程组中的序号；omp_get_num_threads()用于获取县城组中的线程数。所以线程组中每个线程都运行了for循环中的不同部分。
+这里提到for循环的不同部分在线程组中的不同线程中执行的，线程组是在程序遇到"#pragma omp parallel"时创建，在程序块(parallel后的”{...}"或者语句)结束后，线程组中的只有一个主线程。因此上面示例中的代码事实上是以下代码的缩写：
+#pragma omp parallel  
+ {
+#pragma  omp for
+  for (int i = 0; i < 10; ++i)
+  {
+   printf("%d ", i);
+  }
+ }
+
+此处的"#pragma omp for"即使在“#pragma omp parallel”指令创建的线程组中执行的。加入此处没有#pragma omp parallel指令，那么for循环只会在主线程中执行。parallel指令所创建的线程组的线程数默认是有编译器决定的，我们也可以通过num_threads指令来指定线程数，如”#pragma omp parallel num_threads(3)“即告诉编译器，此处需要创建一个包含3个线程的线程组。
+Schedule指令
+Schedule指令提供对for指令中线程调度更多的控制能力。它有两种调度方式：static和dynamic。
+static：每个线程自行决定要执行哪个块，即每个线程执行for循环中的一个子块。
+dynamic：一个线程并不是执行for循环的一个子块，而是每次都向omp运行时库索取一个for循环中的迭代值，然后执行这次迭代，在执行完之后再索取新的值。因此，线程有可能执行任意的迭代值，而不是一个子块。
+之前的”#pragma omp parallel for“实际上的效果是”#pragma omp parallel for schedule(static)"。如果我们将之前的示例采用dynamic调度方式，即：
+#pragma omp parallel  for schedule(dynamic)
+for (int i = 0; i < 10; ++i)
+{
+   printf("%d ", i);
+}
+
+那么打印的结果则有可能不是局部有序的。
+在dynamic调度方式中，还可以指定每次索取的迭代值数量。如，
+#pragma omp parallel  for schedule(dynamic，3)
+for (int i = 0; i < 10; ++i)
+{
+   printf("%d ", i);
+}
+
+在这个例子中，每个线程每次都索取3个迭代值。执行完之后，再拿3个迭代值，直到for循环所有迭代值都运行结束。在最后一次索取的结果有可能不足3个。在程序内部，上面的例子与下面的代码是等价的：
+int a,b;
+if(GOMP_loop_dynamic_start(0,10,1,3,&a,&b))
+{
+do{
+for(int n=a; n<b;++n) printf(" %d", n);
+}while(GOMP_loop_dynamic_next(&a,&b));
+}
+
+ordered指令
+ordered指令用于控制一段代码在for循环中的执行顺序，它保证这段代码一定是按照for中的顺序依次执行的。
+#pragma  omp parallel for ordered schedule(dynamic)
+for (int i = 0; i < 10; ++i)
+{
+    Data data = ReadFile(files[i]);
+#pragma omp ordered
+    PutDataToDataset(data);
+}
+
+这个循环负责读取10个文件，然后将数据放入一个内存结构中。读文件的操作是并行的，但是将数据存入内存结构中则是严格串行的。即先存第一个文件数据，然后第二个...，最后是第十个文件。假设一个线程已经读取了第七个文件的，但是第六个文件还没有存入内存结构，那么这个线程会阻塞，知道第六个文件存入内存结构之后，线程才会继续运行。
+在每一个ordered for循环中，有且仅有一个“#pragma omp ordered"指令限定的代码块。
+sections指令
+section指令用于指定哪些程序块可以并行运行。一个section块内的代码必须串行运行，而section块之间是可以并行运行的。如，
+#pragma omp parallel sections
+{
+{ Work1();}
+#pragma omp section
+{ Work2();
+     Work3();}
+#pragma omp section
+{ Work4();}
+}
+
+以上代码表明，work1，Work1, Work2 + Work3 以及 Work4可以并行运行，但是work2和work3的运行必须是串行运行，并且每个work都只会被运行一次。
+task 指令(OpenMP 3.0新增)
+当觉得for和section指令用着不方便时，可以用task指令。它用于告诉编译器其后续的指令可以并行运行。如OpenMP 3.0用户手册上的一个示例：
+struct node { node *left,*right;};
+externvoid process(node*);
+void traverse(node* p)
+{
+if(p->left)
+#pragma omp task // p is firstprivate by default
+        traverse(p->left);
+if(p->right)
+#pragma omp task // p is firstprivate by default
+        traverse(p->right);
+    process(p);
+}
+
+上面的示例中，当处理当前节点process(p)时，并不能够保证p的左右子树已经处理完毕。为了保证在处理当前节点前，当前节点的左右子树已经处理完成，可以使用taskwait指令，这个指令会保证前面的task都已经处理完成，然后才会继续往下走，添加taskwait指令之后，以上示例代码变为：
+struct node { node *left,*right;};
+externvoid process(node*);
+void postorder_traverse(node* p)
+{
+if(p->left)
+#pragma omp task // p is firstprivate by default
+        postorder_traverse(p->left);
+if(p->right)
+#pragma omp task // p is firstprivate by default
+        postorder_traverse(p->right);
+#pragma omp taskwait
+    process(p);
+}
+
+以下示例演示了如何利用task指令来并行处理链表的元素，由于指针p默认是firstprivate方式共享，所以无需特别指定。
+struct node {int data; node* next;};
+externvoid process(node*);
+void increment_list_items(node* head)
+{
+#pragma omp parallel
+{
+#pragma omp single
+{
+for(node* p = head; p; p = p->next)
+{
+#pragma omp task
+            	process(p);// p is firstprivate by default
+}
+}
+}
+}
+
+atomic指令
+atomic指令用于保证其后续的语句执行时原子性的。所谓原子性，即事务的概念，它的执行不可拆分，要么执行成功，要么什么都没有执行。例如，
+#pragma omp atomic
+ counter += value;
+
+以上代码中，atomic保证对counter的改变时原子性的，如果多个线程同时执行这句代码，也能够保证counter最终拥有正确的值。
+需要说明的是，atomic只能用于简单的表达式，比如+=、-=、*=、&=等，它们通常能够被编译成一条指令。如果上面的示例改为"counter = counter + value"，那将无法通过编译；atomic作用的表达式中也不能够有函数调用、数组索引等操作。另外，它只保证等号左边变量的赋值操作的原子性，等号右边的变量的取值并不是原子性的。这就意味着另外一个线程可能在赋值前改变等号右边的变量。如果要保证更复杂的原子性可以参考后续的critical指令。
+critical 指令
+critical指令用于保证其相关联的代码只在一个线程中执行。另外，我们还可以给critical指令传递一个名称，这个名称是全局性的，所有具有相同名字的critical相关联的代码保证不会同时在多个线程中运行，同一时间最多只会有一个代码块在运行。如果没有指定名称，那系统会给定一个默认的名称：
+#pragma omp critical(dataupdate)
+{
+   datastructure.reorganize();
+}
+...
+#pragma omp critical(dataupdate)
+{
+   datastructure.reorganize_again();
+}
+
+以上代码展示的两个名称为"dataupdate"的critical代码一次只会有一个执行，即datastructure的reorganize()和reorganize_again()不会并行运行，一次最多只会有一个在线程中执行。
+openmp中的锁
+omp运行库提供了一种锁：omp_lock_t，它定义在omp.h头文件中。针对omp_lock_t有5中操作，它们分别是：
+omp_init_lock 初始化锁，初始化后锁处于未锁定状态.
+omp_destroy_lock 销毁锁，调用这个函数时，锁必须是未锁定状态.
+omp_set_lock 尝试获取锁，如果锁已经被其他线程加锁了，那当前线程进入阻塞状态。
+omp_unset_lock 释放锁，调用这个方法的线程必须已经获得了锁，如果当前线程没有获得锁，则会有未定义行为。
+omp_test_lock a尝试获取锁，获取锁成功则返回1，否则返回0.
+omp_lock_t相当于mutex,如果线程已经获得了锁，那在释放锁之前，当前线程不能对锁进行上锁。为了满足这种递归锁的需求，omp提供了omp_nest_lock_t，这种锁相当于recursive_mutex可以递归上锁，但是释放操作必须与上锁操作一一对应，否则锁不会得到释放。
+flush 指令
+对于多线程之间共享的变量，编译器有可能会将它们设为寄存器变量，意味着每个线程事实上都只是拥有这个变量的副本，导致变量值并没有在多个线程之间共享。为了保证共享变量能够在线程之间是真实共享，保证每个线程看到的值都是一致的，可以使用flush指令告诉编译器我们需要哪些哪些共享变量。当我们要在多个线程中读写共同的变量时，我们都应该使用flush指令。
+例如，
+
+/* presumption: int a = 0, b = 0; */
+/* First thread */                /* Second thread */
+    b =1;                            a =1;
+#pragma omp flush(a,b)            #pragma omp flush(a,b)
+if(a ==0)if(b ==0)
+{{
+/* Critical section */            /* Critical section */
+}}
+
+在上面的例子中，变量a,b在两个线程中是共享的，两个线程任何时候看到的a,b的值都是一致的，即线程1所见的即使线程2所见的。
+private, firstprivate,lastprivate 及 shared指令控制变量共享方式 
+这些指令用于控制变量在线程组中多个线程之间的共享方式。其中private,firstprivate,lastprivate表示变量的共享方式是私有的，即每个线程都有一份自己的拷贝；而shared表示线程组的线程访问的是同一个变量。
+私有变量共享方式有三种指令，它们的区别在于：
+private:每个线程都有一份自己的拷贝，但是这些变量并没有拷贝值，即如果变量是int,long,double等这些内置类型，那么这些变量在进入线程时时未初始化状态的；如果变量是类的实例对象，那么在线程中变量是通过默认构造得到的对象，假设类没有默认构造，则编译会报错，告诉你类没有可用的默认构造；
+firstPrivate:每个线程有一份自己的拷贝，每个线程都会通过复制一份。如果变量是int,long,double等内置类型则直接复制，如果为类的实例对象，则会调用示例对象的拷贝构造函数，这就意味着，假如类是的拷贝构造不可访问，则变量不能够使用firstprivate方式共享；
+lastprivate:变量在每个线程的共享方式与private一致，但不同的是，变量的最后一次迭代中的值会flush会主线程中的变量中。最后一次迭代的意思是，如果是for循环，则主线程的变量的值是最后一个迭代值那次迭代中赋的值；如果是section，则主线程的变量最终的值是最后一个section中赋的值。要注意的是，最终主线程的中变量的值并非通过拷贝构造赋值的，而是通过operator=操作符，所以如果类的赋值操作符不可访问，那么变量不能采用lastprivate方式共享。
+default 指令
+default命令用于设置所有变量的默认的共享方式，如default(shared)表示所有变量默认共享方式为shared。除此之外，我们可以使用default(none)来检查我们是否显示设置了所有使用了的变量的共享方式，如：
+int a, b=0;
+#pragma omp parallel default(none) shared(b)
+{
+   b += a;
+}
+
+以上代码无法通过编译，因为在parallel的代码块中使用了变量a和b，但是我们只设置了b的共享方式，而没有设置变量a的共享方式。
+另外需要注意的是，default中的参数不能使用private、firstprivate以及lastprivate。
+reduction 指令
+reductino指令是private,shared及atomic的综合体。它的语法是：
+    reduction(operator : list)
+其中operator指操作符，list表示操作符要作用的列表，通常是一个共享变量名，之所以称之为列表是因为线程组中的每个线程都有一份变量的拷贝，reduction即负责用给定的操作符将这些拷贝的局部变量的值进行聚合，并设置回共享变量。
+其中操作符可以是如下的操作符：
+Operator	Initialization value
++, -, |, ^, ||	0
+*, &&	1
+&	~0
+以下为阶乘的多线程的实现：
+int factorial(int number)
+{
+int fac =1;
+#pragma omp parallel for reduction(*:fac)
+for(int n=2; n<=number;++n)
+     fac *= n;
+return fac;
+}
+
+开始，每个线程会拷贝一份fac；
+parallel块结束之后，每个线程中的fac会利用“*”进行聚合，并将聚合的结果设置回主线程中的fac中。
+如果这里我们不用reduction，那么则需用适用atomic指令，代码如下：
+
+int factorial(int number)
+{
+int fac =1;
+#pragma omp parallel for
+for(int n=2; n<=number;++n)
+{
+#pragma omp atomic
+     fac *= n;
+}
+return fac;
+}
+
+但是这样一来，性能会大大的下降，因为这里没有使用局部变量，每个线程对fac的操作都需要进行同步。所以在这个例子中，并不会从多线程中受益多少，因为atomic成为了性能瓶颈。
+使用reduction指令的代码事实上类似于以下代码：
+
+int factorial(int number)
+{
+int fac =1;
+#pragma omp parallel
+{
+int fac_private =1;
+#pragma omp for nowait
+for(int n=2; n<=number;++n)
+       fac_private *= n;
+#pragma omp atomic
+     fac *= fac_private;
+}
+return fac;
+}
+
+注：最后的聚合实际是包括主线程中共享变量的初始值一起的，在阶乘的例子中，如果fac的初始值不是1，而是10，则最终的结果会是实际阶乘值的10倍！
+barrier和nowait指令 
+barrier指令是线程组中线程的一个同步点，只有线程组中的所有线程都到达这个位置之后，才会继续往下运行。而在每个for、section以及后面要讲到的single代码块最后都隐式的设置了barrier指令。例如
+#pragma omp parallel
+{
+/* All threads execute this. */
+   SomeCode();
+#pragma omp barrier
+/* All threads execute this, but not before
+    * all threads have finished executing SomeCode().
+    */
+   SomeMoreCode();
+}
+
+nowait指令用来告诉编译器无需隐式调用barrier指令，因此如果为for、section、single设置了nowait标志，则在它们最后不会隐式的调用barrier指令，例如：
+#pragma omp parallel
+{
+#pragma omp for
+for(int n=0; n<10;++n) Work();
+// This line is not reached before the for-loop is completely finished
+   SomeMoreCode();
+}
+ 
+// This line is reached only after all threads from
+// the previous parallel block are finished.
+ CodeContinues();
+ 
+#pragma omp parallel
+{
+#pragma omp for nowait
+for(int n=0; n<10;++n) Work();
+// This line may be reached while some threads are still executing the for-loop.
+   SomeMoreCode();
+}
+ 
+// This line is reached only after all threads from
+// the previous parallel block are finished.
+ CodeContinues();
+
+single 和 master 指令
+single指令相关的代码块只运行一个线程执行，但并不限定具体哪一个线程来执行，其它线程必须跳过这个代码块，并在代码块后wait，直到执行这段代码的线程完成。
+#pragma omp parallel
+{
+   Work1();
+#pragma omp single
+{
+     Work2();
+}
+   Work3();
+}
+
+以上代码中，work1()和work3()会在线程组中所有线程都 运行一遍，但是work2()只会在一个线程中执行，即只会执行一遍。
+master指令则指定其相关的代码块必须在主线程中执行，且其它线程不必在代码块后阻塞。
+
+#pragma omp parallel
+{
+   Work1();
+// This...
+#pragma omp master
+{
+     Work2();
+}
+// ...is practically identical to this:
+if(omp_get_thread_num()==0)
+{
+     Work2();
+}
+   
+   Work3();
+}
+
+循环嵌套
+如下代码并不会按照我们期望的方式运行：
+#pragma omp parallel for
+for(int y=0; y<25;++y)
+{
+#pragma omp parallel for
+for(int x=0; x<80;++x)
+{
+     tick(x,y);
+}
+}
+
+实际上内部的那个“parallel for"会被忽略，自始至终只创建了一个线程组。假如将上述代码改为如下所示，将无法通过编译：
+#pragma omp parallel for
+for(int y=0; y<25;++y)
+{
+#pragma omp for // ERROR, nesting like this is not allowed.
+for(int x=0; x<80;++x)
+{
+     tick(x,y);
+}
+}
+OpenMP 3.0中的解决方案
+在OpenMP 3.0中，可以利用collapse指令来解决循环嵌套问题，如：
+#pragma omp parallel for collapse(2)
+for(int y=0; y<25;++y)
+for(int x=0; x<80;++x)
+{
+     tick(x,y);
+}
+
+collapse指令传递的数字就代表了循环嵌套的深度，这里为2层。
+OpenMP 2.5中正确的做法
+在OpenMP 2.5中，我们可以通过将多层循环改为单层循环的方法来达到目的，这样便无需循环嵌套:
+
+#pragma omp parallel for
+for(int pos=0; pos<(25*80);++pos)
+{
+int x = pos%80;
+int y = pos/80;
+   tick(x,y);
+}
+
+然而重写这样的代码也并非易事，另一个办法是采用omp_set_nested方法开启循环嵌套支持，默认是关闭的：
+ omp_set_nested(1);
+#pragma omp parallel for
+for(int y=0; y<25;++y)
+{
+#pragma omp parallel for
+for(int x=0; x<80;++x)
+{
+     tick(x,y);
+}
+}
+
+现在内层循环中，也会创建一个大小为N的线程组，因此实际上我们将得到N*N个线程，这便会导致频繁的线程切换，会带来较大的性能损失，这也就是为什么循环嵌套默认是关闭的。也许最好的方法就是将外层循环的parallel指令删除，只保留内层循环的parallel：
+for(int y=0; y<25;++y)
+{
+#pragma omp parallel for
+for(int x=0; x<80;++x)
+{
+     tick(x,y);
+}
+}
+
+取消线程（退出循环）
+加入我们想要使用omp多线程来优化如下方法：
+constchar* FindAnyNeedle(constchar* haystack, size_t size,char needle)
+{
+for(size_t p =0; p < size;++p)
+if(haystack[p]== needle)
+{return haystack+p;    //找到needle，直接退出函数
+}
+return NULL;
+}
+
+我们最直观的想法应该是在for循环外加上“#pragma omp parallel for"，但是让人失望的是这将无法通过编译。因为omp要求必须每个循环迭代都能得到处理，因此不允许直接退出循环，这也就是说在循环中不能使用return、break、goto、throw等能够中断循环的语句。为了能够提前退出循环，我们需要退出时，通知线程组的其他线程，让它们结束运行：
+弃用omp，选择其他多线程编程，如pthread
+通过共享变量，通知线程组其他线程
+以下为使用布尔标记来通知其他线程的示例：
+
+constchar* FindAnyNeedle(constchar* haystack, size_t size,char needle)
+{
+constchar* result = NULL;
+bool done =false;
+#pragma omp parallel for
+for(size_t p =0; p < size;++p)
+{
+#pragma omp flush(done)
+if(!done)
+{
+/* Do work only if no thread has found the needle yet. */
+if(haystack[p]== needle)
+{
+/* Inform the other threads that we found the needle. */
+         done =true;
+#pragma omp flush(done)
+         result = haystack+p;
+}
+}
+}
+return result;
+}
+
+然而这样写有个缺点就是，即使done标记变为true了，其他线程仍然需要完成每次迭代，即使这些迭代是完全没有意义的。. 当然，我们也可以不用上述的done标记：
+constchar* FindAnyNeedle(constchar* haystack, size_t size,char needle)
+{
+constchar* result = NULL;
+#pragma omp parallel for
+for(size_t p =0; p < size;++p)
+if(haystack[p]== needle)
+       result = haystack+p;
+return result;
+}
+
+但是这也并没有完全解决问题，因为这样当一个线程已经找到需要的结果是，也不能够避免其他线程继续运行，这也就造成了不必要的浪费。
+事实上，omp针对这个问题并没有很好的解决办法，如果确实需要，那只能求助于其他线程库了。
+
+延伸阅读
+The OpenMP 2.5 official specification
+The OpenMP 3.0 official specification
+Wikipedia article for OpenMP
+OpenMP crash course at ARSC — has especially good list of gotchas.
+————————————————
+版权声明：本文为CSDN博主「Rechar_Deng」的原创文章，遵循 CC 4.0 BY-SA 版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/acaiwlj/article/details/49818965
