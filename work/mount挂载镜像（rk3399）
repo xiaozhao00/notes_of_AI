@@ -1,0 +1,7 @@
+ fdisk -l 2018-10-09-raspbian-stretch.img
+
+mount -o loop,offset=$((98304*512)) 2018-11-13-raspbian-stretch.img /mnt/raspbian_rootfs
+
+offset代表镜像内容真正开始的地方，因此我们需要指定正确的offset值才可以解压IMG。offset的计算依赖于对于IMG镜像的分析：
+fdisk  -lu IMG
+可以得到IMG的数据信息，其中有开始的镜像扇区数N与每个扇区的长
