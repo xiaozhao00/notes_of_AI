@@ -1,0 +1,24 @@
+安装工具
+
+sudo apt-get install autoconf automake libtool curl make g++ unzip
+
+//1. 下载最新版本
+git clone https://github.com/protocolbuffers/protobuf.git
+cd protobuf
+git submodule update --init --recursive
+./autogen.sh
+ 
+//2. build 并 install
+./configure
+ make
+ make check
+ sudo make install
+ sudo ldconfig # refresh shared library cache.
+ 
+//3. 验证
+protoc --version
+输出：libprotoc 3.6.1
+
+————————————————
+版权声明：本文为CSDN博主「Nine-days」的原创文章，遵循 CC 4.0 BY-SA 版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/u011808673/article/details/90770168
