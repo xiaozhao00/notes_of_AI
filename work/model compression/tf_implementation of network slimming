@@ -1,0 +1,103 @@
+import tensorflow as tf
+from tensorflow.python import pywrap_tensorflow
+import numpy as np
+import os
+
+pruned_ckpt_dir = "./pruned_ckpt_ratio_0"
+model_reader = pywrap_tensorflow.NewCheckpointReader("pbmodel_ssdlite_mobilenetv2_100_192_item19_finetunev1_126632/model.ckpt")
+
+var_dict = model_reader.get_variable_to_shape_map()
+
+prune_ratio = 0
+
+
+gamma_dict = {}
+gamma_np_dict = {}
+for key in var_dict:
+    start_index = len(key) - 22
+    if key[start_index:] == "expand/BatchNorm/gamma":
+        print("variable name: ", key)
+        print("variable shape: ", len(var_dict[key]))
+        gamma_np_dict[key] = model_reader.get_tensor(key)    # numpy to list
+        gamma_np_dict[key] = np.abs(gamma_np_dict[key])
+
+        gamma_dict[key] = gamma_np_dict[key].tolist()
+#        print(model_reader.get_tensor(key))
+
+gamma_list = []
+for i in gamma_dict:
+    print(type(gamma_dict[i]))
+    gamma_list += gamma_dict[i]
+
+print("len of gamma_list:", len(gamma_list))
+
+
+tmp_list = sorted(gamma_list)
+thresh_ind = int(len(tmp_list) * prune_ratio)
+thresh = tmp_list[thresh_ind]
+
+thresh = -1000
+
+# position of value larger than thresh
+pos_dict = {}
+for i in gamma_np_dict:
+    arr = gamma_np_dict[i]
+    total = np.sum(arr > thresh)
+    print(i)
+    print("orgin len:", len(arr))
+    print("prune len:", total)
+
+    tmp_name = i.split("/")[2]
+    print(tmp_name)
+    pos = np.where(arr > thresh)
+    pos_dict[tmp_name] = pos[0]
+
+# modify the value of ckpt variable
+with tf.Session() as sess:
+    new_var_list=[]
+
+    for key in var_dict:
+        var_shape = var_dict[key]
+        old_value = model_reader.get_tensor(key)
+
+        tmp_list = key.split("/")
+
+        if len(tmp_list) < 3:
+            new_var = tf.Variable(old_value, name=key)
+            new_var_list.append(new_var)
+            continue
+
+        name = tmp_list[2]
+        if name not in pos_dict:
+            new_var = tf.Variable(old_value, name=key)
+            new_var_list.append(new_var)
+            continue
+
+        pos = pos_dict[name]
+        if tmp_list[3]=="expand":
+            print("key:", key)
+            if len(var_shape)==1:
+                new_value = old_value[pos]
+
+            elif len(var_shape)==4:
+                new_value = old_value[:,:,:,pos]
+
+            print("new_value_shape:", new_value.shape)
+
+        elif (tmp_list[3]=="depthwise") or ((tmp_list[-1] =="weights") and (tmp_list[-2]=="project")):
+            if len(var_shape)==1:
+                new_value = old_value[pos]
+            elif len(var_shape)==4:
+                new_value = old_value[:,:,pos,:]
+        else:
+            new_value = old_value
+
+        new_var = tf.Variable(new_value, name=key)
+        new_var_list.append(new_var)
+
+
+    saver = tf.train.Saver(var_list=new_var_list)
+    sess.run(tf.global_variables_initializer())
+
+    checkpoint_path = os.path.join(pruned_ckpt_dir, "model.ckpt")
+    saver.save(sess, checkpoint_path)
