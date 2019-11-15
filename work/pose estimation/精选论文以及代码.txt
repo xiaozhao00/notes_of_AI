@@ -1,0 +1,14 @@
+1. Pose Proposal Network
+   pytorch implementaion: https://github.com/wangziren1/pytorch_pose_proposal_networks
+   chainer implementaion: https://github.com/Idein/chainer-pose-proposal-net
+   
+2. Single-Network Whole-Body Pose Estimation Model
+   caffe implementation: https://github.com/CMU-Perceptual-Computing-Lab/openpose_train/tree/master/experimental_models
+   
+3. PoseNet
+   tensorflow implementation: https://github.com/tensorlayer/openpose-plus
+   tensorflow implementation: https://github.com/ildoonet/tf-pose-estimation (mobilenet_v2_large mobilenet_thin)
+   
+4. MultiPoseNet: Fast Multi-Person Pose Estimation using Pose Residual Network (ECCV 2018)
+   Keras: https://github.com/mkocabas/pose-residual-network
+   pytorch implementation: https://github.com/salihkaragoz/pose-residual-network-pytorch
