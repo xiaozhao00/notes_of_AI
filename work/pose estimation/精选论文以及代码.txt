@@ -5,10 +5,13 @@
 2. Single-Network Whole-Body Pose Estimation Model
    caffe implementation: https://github.com/CMU-Perceptual-Computing-Lab/openpose_train/tree/master/experimental_models
    
-3. PoseNet
+3. openpose
    tensorflow implementation: https://github.com/tensorlayer/openpose-plus
    tensorflow implementation: https://github.com/ildoonet/tf-pose-estimation (mobilenet_v2_large mobilenet_thin)
    
 4. MultiPoseNet: Fast Multi-Person Pose Estimation using Pose Residual Network (ECCV 2018)
    Keras: https://github.com/mkocabas/pose-residual-network
    pytorch implementation: https://github.com/salihkaragoz/pose-residual-network-pytorch
+   
+5. PifPaf: Composite Fields for Human Pose Estimation(CVPR2019)
+   PyTorch implementation: https://github.com/vita-epfl/openpifpaf
